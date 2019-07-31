@@ -340,9 +340,12 @@ RCT_EXPORT_METHOD(scan:(NSArray *)serviceUUIDStrings timeoutSeconds:(nonnull NSN
     }
     [manager scanForPeripheralsWithServices:serviceUUIDs options:options];
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.scanTimer = [NSTimer scheduledTimerWithTimeInterval:[timeoutSeconds floatValue] target:self selector:@selector(stopScanTimer:) userInfo: nil repeats:NO];
-    });
+    if ( timeoutSeconds.intValue != -1 ) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.scanTimer = [NSTimer scheduledTimerWithTimeInterval:[timeoutSeconds floatValue] target:self selector:@selector(stopScanTimer:) userInfo: nil repeats:NO];
+        });
+    }
+
     callback(@[]);
 }
 
