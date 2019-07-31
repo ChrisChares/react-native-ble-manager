@@ -60,12 +60,13 @@ bool hasListeners;
         
         manager.delegate = nil;
     }
+    @synchronized(peripherals) {
+        for (CBPeripheral* p in peripherals) {
+            p.delegate = nil;
+        }
     
-    for (CBPeripheral* p in peripherals) {
-        p.delegate = nil;
+        peripherals = [NSMutableSet set];
     }
-    
-    peripherals = [NSMutableSet set];
 }
 
 +(BOOL)requiresMainQueueSetup
@@ -191,14 +192,15 @@ bool hasListeners;
 - (CBPeripheral*)findPeripheralByUUID:(NSString*)uuid {
     
     CBPeripheral *peripheral = nil;
-    
-    for (CBPeripheral *p in peripherals) {
+    @synchronized(peripherals) {
+        for (CBPeripheral *p in peripherals) {
         
-        NSString* other = p.identifier.UUIDString;
+            NSString* other = p.identifier.UUIDString;
         
-        if ([uuid isEqualToString:other]) {
-            peripheral = p;
-            break;
+            if ([uuid isEqualToString:other]) {
+                peripheral = p;
+                break;
+            }
         }
     }
     return peripheral;
@@ -253,10 +255,12 @@ RCT_EXPORT_METHOD(getConnectedPeripherals:(NSArray *)serviceUUIDStrings callback
 
     NSMutableArray *foundedPeripherals = [NSMutableArray array];
     if ([serviceUUIDs count] == 0){
-        for(CBPeripheral *peripheral in peripherals){
-            if([peripheral state] == CBPeripheralStateConnected){
-                NSDictionary * obj = [peripheral asDictionary];
-                [foundedPeripherals addObject:obj];
+        @synchronized(peripherals) {
+            for(CBPeripheral *peripheral in peripherals){
+                if([peripheral state] == CBPeripheralStateConnected){
+                    NSDictionary * obj = [peripheral asDictionary];
+                    [foundedPeripherals addObject:obj];
+                }
             }
         }
     } else {
@@ -306,6 +310,23 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options callback:(nonnull RCTResponseSen
 RCT_EXPORT_METHOD(scan:(NSArray *)serviceUUIDStrings timeoutSeconds:(nonnull NSNumber *)timeoutSeconds allowDuplicates:(BOOL)allowDuplicates options:(nonnull NSDictionary*)scanningOptions callback:(nonnull RCTResponseSenderBlock)callback)
 {
     NSLog(@"scan with timeout %@", timeoutSeconds);
+    
+    // Clear the peripherals before scanning again, otherwise cannot connect again after disconnection
+    // Only clear peripherals that are not connected - otherwise connections fail silently (without any
+    // onDisconnect* callback).
+    @synchronized(peripherals) {
+      NSMutableArray *connectedPeripherals = [NSMutableArray array];
+      for (CBPeripheral *peripheral in peripherals) {
+          if (([peripheral state] != CBPeripheralStateConnected) &&
+              ([peripheral state] != CBPeripheralStateConnecting)) {
+              [connectedPeripherals addObject:peripheral];
+          }
+      }
+      for (CBPeripheral *p in connectedPeripherals) {
+          [peripherals removeObject:p];
+      }
+    }
+
     NSArray * services = [RCTConvert NSArray:serviceUUIDStrings];
     NSMutableArray *serviceUUIDs = [NSMutableArray new];
     NSDictionary *options = nil;
@@ -332,6 +353,9 @@ RCT_EXPORT_METHOD(stopScan:(nonnull RCTResponseSenderBlock)callback)
         self.scanTimer = nil;
     }
     [manager stopScan];
+    if (hasListeners) {
+        [self sendEventWithName:@"BleManagerStopScan" body:@{}];
+    }
     callback(@[[NSNull null]]);
 }
 
@@ -398,7 +422,7 @@ RCT_EXPORT_METHOD(connect:(NSString *)peripheralUUID callback:(nonnull RCTRespon
     }
 }
 
-RCT_EXPORT_METHOD(disconnect:(NSString *)peripheralUUID  callback:(nonnull RCTResponseSenderBlock)callback)
+RCT_EXPORT_METHOD(disconnect:(NSString *)peripheralUUID force:(BOOL)force callback:(nonnull RCTResponseSenderBlock)callback)
 {
     CBPeripheral *peripheral = [self findPeripheralByUUID:peripheralUUID];
     if (peripheral) {
@@ -739,6 +763,8 @@ RCT_EXPORT_METHOD(requestMTU:(NSString *)deviceUUID mtu:(NSInteger)mtu callback:
             [self sendEventWithName:@"BleManagerConnectPeripheral" body:@{@"peripheral": [peripheral uuidAsString]}];
         }
     });
+
+    [writeQueue removeAllObjects];
 }
 
 - (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
